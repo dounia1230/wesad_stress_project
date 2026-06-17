@@ -10,3 +10,4 @@ artifacts/preprocessing/
 artifacts/results/
 *.pkl
 *.npz
+*.joblib

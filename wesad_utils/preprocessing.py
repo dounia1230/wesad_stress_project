@@ -7,6 +7,7 @@ import pickle
 from dataclasses import dataclass
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 import torch
@@ -191,14 +192,26 @@ def run_preprocessing(project_root: Path) -> dict[str, object]:
             handle,
             indent=2,
         )
-    np.savez(
-        artifact_dir / "sequence_scaler.npz",
-        mean=sequence_scaler.mean_,
-        scale=sequence_scaler.scale_,
-        var=sequence_scaler.var_,
-    )
-    with (artifact_dir / "sequence_scaler.pkl").open("wb") as handle:
-        pickle.dump(sequence_scaler, handle)
+    with (artifact_dir / "label_mapping.json").open("w", encoding="utf-8") as handle:
+        json.dump(
+            {
+                "0": "non_stress",
+                "1": "stress",
+                "source_labels": BINARY_LABEL_MAP,
+            },
+            handle,
+            indent=2,
+        )
+    class_distribution = pd.concat(
+        [
+            pd.Series(y[split]).value_counts().sort_index().rename(split)
+            for split in SPLIT_SUBJECTS
+        ],
+        axis=1,
+    ).fillna(0).astype(int)
+    class_distribution.index.name = "binary_label"
+    class_distribution.to_csv(artifact_dir / "class_distribution.csv")
+    joblib.dump(sequence_scaler, artifact_dir / "sequence_scaler.joblib")
 
     return {
         "sequence_shapes": {split: tuple(X_sequence[split].shape) for split in SPLIT_SUBJECTS},
@@ -393,4 +406,3 @@ def _safe_corr(a: np.ndarray, b: np.ndarray) -> float:
     if np.std(a) < 1e-8 or np.std(b) < 1e-8:
         return 0.0
     return float(np.corrcoef(a, b)[0, 1])
-

@@ -34,25 +34,40 @@ def collect_probabilities(
             logits = model(batch_x)
             probabilities.append(logits_to_probabilities(logits).cpu().numpy())
             labels.append(batch_y.float().cpu().numpy().reshape(-1))
+    if not probabilities:
+        raise ValueError("Cannot collect probabilities from an empty loader.")
     return np.concatenate(probabilities), np.concatenate(labels)
 
 
 def select_threshold(y_true: np.ndarray, probabilities: np.ndarray) -> tuple[float, pd.DataFrame]:
+    y_true, probabilities = _validate_binary_arrays(y_true, probabilities)
     rows = []
     for threshold in np.arange(0.10, 0.91, 0.01):
         predicted = (probabilities >= threshold).astype(int)
+        precision, recall, _, _ = precision_recall_fscore_support(
+            y_true,
+            predicted,
+            labels=[0, 1],
+            zero_division=0,
+        )
         rows.append(
             {
                 "threshold": float(round(threshold, 2)),
                 "macro_f1": float(f1_score(y_true, predicted, average="macro", zero_division=0)),
+                "weighted_f1": float(f1_score(y_true, predicted, average="weighted", zero_division=0)),
+                "stress_precision": float(precision[1]),
+                "stress_recall": float(recall[1]),
+                "distance_from_0_5": abs(float(round(threshold, 2)) - 0.5),
             }
         )
     table = pd.DataFrame(rows)
-    best_row = table.sort_values(["macro_f1", "threshold"], ascending=[False, True]).iloc[0]
+    best_row = table.sort_values(["macro_f1", "distance_from_0_5"], ascending=[False, True]).iloc[0]
+    table = table.drop(columns=["distance_from_0_5"])
     return float(best_row["threshold"]), table
 
 
 def binary_metrics(y_true: np.ndarray, probabilities: np.ndarray, threshold: float) -> dict[str, object]:
+    y_true, probabilities = _validate_binary_arrays(y_true, probabilities)
     predicted = (probabilities >= threshold).astype(int)
     precision, recall, _, _ = precision_recall_fscore_support(
         y_true,
@@ -80,13 +95,21 @@ def per_subject_metrics(
     probabilities: np.ndarray,
     threshold: float,
 ) -> pd.DataFrame:
+    y_true, probabilities = _validate_binary_arrays(y_true, probabilities)
+    if len(metadata) != len(y_true):
+        raise ValueError("Metadata length must match the number of predictions.")
+    if "subject_id" not in metadata or "window_id" not in metadata:
+        raise ValueError("Metadata must include subject_id and window_id columns.")
     frame = metadata[["subject_id", "window_id"]].copy()
     frame["y_true"] = y_true.astype(int)
     frame["probability"] = probabilities
     frame["prediction"] = (probabilities >= threshold).astype(int)
 
     rows = []
-    for subject_id, group in frame.groupby("subject_id"):
+    expected_subjects = set(metadata["subject_id"].unique())
+    observed_subjects = set()
+    for subject_id, group in frame.groupby("subject_id", sort=True):
+        observed_subjects.add(subject_id)
         rows.append(
             {
                 "subject_id": subject_id,
@@ -98,6 +121,9 @@ def per_subject_metrics(
                 ),
             }
         )
+    if observed_subjects != expected_subjects:
+        missing = sorted(expected_subjects - observed_subjects)
+        raise ValueError(f"Missing per-subject metrics for subjects: {missing}")
     return pd.DataFrame(rows)
 
 
@@ -107,6 +133,9 @@ def prediction_table(
     probabilities: np.ndarray,
     threshold: float,
 ) -> pd.DataFrame:
+    y_true, probabilities = _validate_binary_arrays(y_true, probabilities)
+    if len(metadata) != len(y_true):
+        raise ValueError("Metadata length must match the number of predictions.")
     return pd.DataFrame(
         {
             "window_id": metadata["window_id"].to_numpy(),
@@ -114,6 +143,7 @@ def prediction_table(
             "true_label": y_true.astype(int),
             "stress_probability": probabilities,
             "predicted_label": (probabilities >= threshold).astype(int),
+            "threshold": threshold,
         }
     )
 
@@ -128,3 +158,17 @@ def _safe_score(
     except ValueError:
         return None
 
+
+def _validate_binary_arrays(
+    y_true: np.ndarray,
+    probabilities: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    y_true = np.asarray(y_true).reshape(-1)
+    probabilities = np.asarray(probabilities).reshape(-1)
+    if len(y_true) == 0:
+        raise ValueError("y_true and probabilities must not be empty.")
+    if len(y_true) != len(probabilities):
+        raise ValueError("y_true and probabilities must have the same length.")
+    if not np.isfinite(probabilities).all():
+        raise ValueError("Probabilities must be finite.")
+    return y_true, probabilities

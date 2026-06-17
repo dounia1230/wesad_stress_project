@@ -7,15 +7,14 @@ This project builds a fair comparison of MLP, CNN, RNN, LSTM, GRU, CNN-LSTM, and
 ```text
 app.py
 requirements.txt
-src/                  reusable preprocessing, training, evaluation, and config
-models/               reusable PyTorch model definitions
+wesad_utils/          reusable preprocessing, training, evaluation, config, and helpers
 notebooks/            executable experiment workflow
 data/                 raw and generated datasets
 artifacts/            trained models, metrics, scalers, and configs
 reports/              generated figures and tables
 ```
 
-The notebooks remain the main workflow for running and presenting the experiments. Reusable code now lives in `src/` and `models/` so model definitions and helper functions are not tied to notebook cells.
+The notebooks remain the main workflow for running and presenting the experiments. Reusable preprocessing, training, evaluation, and artifact-saving code lives in `wesad_utils/`. Model architecture classes remain inside their notebooks so they are visible during presentation.
 
 Run the notebooks in order:
 

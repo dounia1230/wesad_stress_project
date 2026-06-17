@@ -1,20 +1,33 @@
-# WESAD Stress Classification
+# WESAD Stress Classification Project
 
-Deep learning project for binary stress detection using WESAD wrist-sensor signals.
+This project builds a fair comparison of MLP, CNN, RNN, LSTM, GRU, CNN-LSTM, and CNN-GRU models for binary stress detection using WESAD wrist signals.
 
-The project compares statistical-feature and sequence-based neural models on the same subject-level train, validation, and test splits. It includes preprocessing, model training, evaluation, per-subject metrics, and final model comparison notebooks.
-
-## Project Layout
+## Project structure
 
 ```text
-wesad_stress_project/
-  src/          reusable preprocessing, training, evaluation, and config code
-  models/       PyTorch model definitions
-  notebooks/    ordered experiment workflow
-  data/         raw and processed WESAD data
-  artifacts/    trained models, scalers, metrics, and predictions
-  reports/      generated figures and tables
+app.py
+requirements.txt
+src/                  reusable preprocessing, training, evaluation, and config
+models/               reusable PyTorch model definitions
+notebooks/            executable experiment workflow
+data/                 raw and generated datasets
+artifacts/            trained models, metrics, scalers, and configs
+reports/              generated figures and tables
 ```
 
-See [`wesad_stress_project/README.md`](wesad_stress_project/README.md) for the full notebook workflow.
+The notebooks remain the main workflow for running and presenting the experiments. Reusable code now lives in `src/` and `models/` so model definitions and helper functions are not tied to notebook cells.
 
+Run the notebooks in order:
+
+1. `notebooks/00_data_exploration.ipynb`
+2. `notebooks/01_preprocessing_and_splits.ipynb`
+3. `notebooks/02_mlp.ipynb`
+4. `notebooks/03_cnn.ipynb`
+5. `notebooks/04_rnn.ipynb`
+6. `notebooks/05_lstm.ipynb`
+7. `notebooks/06_gru.ipynb`
+8. `notebooks/07_cnn_lstm.ipynb`
+9. `notebooks/08_cnn_gru.ipynb`
+10. `notebooks/09_model_comparison.ipynb`
+
+The preprocessing notebook creates the shared train, validation, and test windows. All model notebooks load those same windows so the comparison uses the same participants, labels, and windows.

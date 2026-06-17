@@ -18,6 +18,8 @@ wesad_stress_project/
 
 The notebooks remain the main workflow for running and presenting the experiments. Reusable code now lives in `src/` and `models/` so model definitions and helper functions are not tied to notebook cells.
 
+The repository root README gives a short GitHub overview, while this file documents the project workflow.
+
 Run the notebooks in order:
 
 1. `notebooks/00_data_exploration.ipynb`

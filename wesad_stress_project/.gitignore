@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+data/WESAD/
+models/*.pt
+outputs/
+data/processed/
+artifacts/models/
+artifacts/preprocessing/
+artifacts/results/
+*.pkl
+*.npz

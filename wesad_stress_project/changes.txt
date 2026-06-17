@@ -1,0 +1,619 @@
+Yes—I do. **Training and evaluation utilities should be separate from the notebooks**, while the **model architecture itself can remain in each notebook** for presentation.
+
+That gives you the best balance:
+
+* Your professor can see and discuss each model class directly in its notebook.
+* Repeated training code is implemented once.
+* Every model is trained and evaluated with exactly the same procedure.
+* Bug fixes apply to all models.
+* The notebooks stay readable instead of containing hundreds of repeated lines.
+
+## Recommended structure
+
+```text
+wesad_stress_project/
+├── notebooks/
+│   ├── 00_data_exploration.ipynb
+│   ├── 01_preprocessing_and_splits.ipynb
+│   ├── 02_mlp.ipynb
+│   ├── 03_cnn.ipynb
+│   ├── 04_rnn.ipynb
+│   ├── 05_lstm.ipynb
+│   ├── 06_gru.ipynb
+│   ├── 07_cnn_lstm.ipynb
+│   ├── 08_cnn_gru.ipynb
+│   └── 09_model_comparison.ipynb
+│
+├── utils/
+│   ├── __init__.py
+│   ├── training_utils.py
+│   ├── evaluation_utils.py
+│   └── artifact_utils.py
+│
+├── artifacts/
+├── data/
+├── reports/
+└── app.py
+```
+
+You can optionally put shared PyTorch dataset code in:
+
+```text
+utils/data_utils.py
+```
+
+But you do not need a large software architecture.
+
+# What should remain in the notebook
+
+Keep these visible in each model notebook:
+
+* Explanation of the model.
+* Input tensor shape.
+* Model architecture class.
+* Model hyperparameters.
+* Loss configuration.
+* Optimizer configuration.
+* Why class weighting is used or not used.
+* Training call.
+* Result tables and plots.
+* Interpretation of the results.
+
+For example, in `05_lstm.ipynb`, keep:
+
+```python
+class LSTMClassifier(nn.Module):
+    def __init__(
+        self,
+        input_size: int = 6,
+        hidden_size: int = 64,
+        dropout: float = 0.3,
+    ):
+        super().__init__()
+
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            batch_first=True,
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1),
+        )
+
+    def forward(self, x):
+        _, (hidden, _) = self.lstm(x)
+        return self.classifier(hidden[-1]).squeeze(-1)
+```
+
+That is the most model-specific and educational part.
+
+# What should move to utilities
+
+## `training_utils.py`
+
+Move repeated training logic here:
+
+```python
+set_seed(...)
+train_one_epoch(...)
+evaluate_epoch(...)
+train_with_early_stopping(...)
+calculate_pos_weight(...)
+```
+
+## `evaluation_utils.py`
+
+Move repeated evaluation logic here:
+
+```python
+predict_probabilities(...)
+find_best_threshold(...)
+calculate_binary_metrics(...)
+calculate_per_subject_metrics(...)
+create_confusion_matrix(...)
+```
+
+## `artifact_utils.py`
+
+Move repeated saving code here:
+
+```python
+save_model_checkpoint(...)
+save_json(...)
+save_training_history(...)
+save_predictions(...)
+save_model_results(...)
+```
+
+# Suggested `training_utils.py`
+
+```python
+from copy import deepcopy
+from typing import Optional
+
+import numpy as np
+import torch
+from torch import nn
+from torch.utils.data import DataLoader
+
+
+def set_seed(seed: int = 42) -> None:
+    import random
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def calculate_pos_weight(
+    labels: torch.Tensor,
+    device: torch.device,
+) -> torch.Tensor:
+    labels = labels.reshape(-1)
+
+    negative_count = int((labels == 0).sum().item())
+    positive_count = int((labels == 1).sum().item())
+
+    if positive_count == 0:
+        raise ValueError(
+            "The training labels contain no positive samples."
+        )
+
+    return torch.tensor(
+        [negative_count / positive_count],
+        dtype=torch.float32,
+        device=device,
+    )
+
+
+def train_one_epoch(
+    model: nn.Module,
+    data_loader: DataLoader,
+    criterion: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    gradient_clip: Optional[float] = None,
+) -> float:
+    model.train()
+
+    total_loss = 0.0
+    total_samples = 0
+
+    for features, labels in data_loader:
+        features = features.to(device)
+        labels = labels.to(device).float()
+
+        optimizer.zero_grad(set_to_none=True)
+
+        logits = model(features).reshape(-1)
+        loss = criterion(logits, labels)
+
+        loss.backward()
+
+        if gradient_clip is not None:
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                max_norm=gradient_clip,
+            )
+
+        optimizer.step()
+
+        batch_size = labels.size(0)
+        total_loss += loss.item() * batch_size
+        total_samples += batch_size
+
+    return total_loss / total_samples
+
+
+@torch.no_grad()
+def evaluate_loss(
+    model: nn.Module,
+    data_loader: DataLoader,
+    criterion: nn.Module,
+    device: torch.device,
+) -> float:
+    model.eval()
+
+    total_loss = 0.0
+    total_samples = 0
+
+    for features, labels in data_loader:
+        features = features.to(device)
+        labels = labels.to(device).float()
+
+        logits = model(features).reshape(-1)
+        loss = criterion(logits, labels)
+
+        batch_size = labels.size(0)
+        total_loss += loss.item() * batch_size
+        total_samples += batch_size
+
+    return total_loss / total_samples
+```
+
+# Early stopping utility
+
+```python
+def train_with_early_stopping(
+    model: nn.Module,
+    train_loader: DataLoader,
+    validation_loader: DataLoader,
+    criterion: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    max_epochs: int = 50,
+    patience: int = 8,
+    gradient_clip: float | None = None,
+) -> tuple[nn.Module, list[dict]]:
+    best_state = deepcopy(model.state_dict())
+    best_validation_loss = float("inf")
+    epochs_without_improvement = 0
+    history = []
+
+    for epoch in range(1, max_epochs + 1):
+        train_loss = train_one_epoch(
+            model=model,
+            data_loader=train_loader,
+            criterion=criterion,
+            optimizer=optimizer,
+            device=device,
+            gradient_clip=gradient_clip,
+        )
+
+        validation_loss = evaluate_loss(
+            model=model,
+            data_loader=validation_loader,
+            criterion=criterion,
+            device=device,
+        )
+
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "validation_loss": validation_loss,
+            }
+        )
+
+        if validation_loss < best_validation_loss:
+            best_validation_loss = validation_loss
+            best_state = deepcopy(model.state_dict())
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        print(
+            f"Epoch {epoch:02d} | "
+            f"train loss: {train_loss:.4f} | "
+            f"validation loss: {validation_loss:.4f}"
+        )
+
+        if epochs_without_improvement >= patience:
+            print("Early stopping triggered.")
+            break
+
+    model.load_state_dict(best_state)
+
+    return model, history
+```
+
+# Suggested `evaluation_utils.py`
+
+```python
+import numpy as np
+import torch
+
+from sklearn.metrics import (
+    average_precision_score,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+
+
+@torch.no_grad()
+def predict_probabilities(
+    model,
+    data_loader,
+    device,
+) -> tuple[np.ndarray, np.ndarray]:
+    model.eval()
+
+    all_probabilities = []
+    all_labels = []
+
+    for features, labels in data_loader:
+        features = features.to(device)
+
+        logits = model(features).reshape(-1)
+        probabilities = torch.sigmoid(logits)
+
+        all_probabilities.append(
+            probabilities.cpu().numpy()
+        )
+        all_labels.append(
+            labels.reshape(-1).cpu().numpy()
+        )
+
+    return (
+        np.concatenate(all_probabilities),
+        np.concatenate(all_labels).astype(int),
+    )
+
+
+def find_best_threshold(
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+) -> tuple[float, float]:
+    best_threshold = 0.5
+    best_macro_f1 = -1.0
+
+    for threshold in np.arange(0.10, 0.91, 0.01):
+        predictions = (
+            probabilities >= threshold
+        ).astype(int)
+
+        macro_f1 = f1_score(
+            labels,
+            predictions,
+            average="macro",
+            zero_division=0,
+        )
+
+        if macro_f1 > best_macro_f1:
+            best_macro_f1 = macro_f1
+            best_threshold = float(threshold)
+
+    return best_threshold, best_macro_f1
+
+
+def calculate_binary_metrics(
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+    threshold: float,
+) -> dict:
+    predictions = (
+        probabilities >= threshold
+    ).astype(int)
+
+    return {
+        "macro_f1": float(
+            f1_score(
+                labels,
+                predictions,
+                average="macro",
+                zero_division=0,
+            )
+        ),
+        "weighted_f1": float(
+            f1_score(
+                labels,
+                predictions,
+                average="weighted",
+                zero_division=0,
+            )
+        ),
+        "stress_precision": float(
+            precision_score(
+                labels,
+                predictions,
+                pos_label=1,
+                zero_division=0,
+            )
+        ),
+        "stress_recall": float(
+            recall_score(
+                labels,
+                predictions,
+                pos_label=1,
+                zero_division=0,
+            )
+        ),
+        "roc_auc": float(
+            roc_auc_score(labels, probabilities)
+        ),
+        "pr_auc": float(
+            average_precision_score(
+                labels,
+                probabilities,
+            )
+        ),
+        "confusion_matrix": confusion_matrix(
+            labels,
+            predictions,
+        ).tolist(),
+    }
+```
+
+# How the notebook would look
+
+Your CNN notebook could become much cleaner:
+
+```python
+from utils.training_utils import (
+    calculate_pos_weight,
+    set_seed,
+    train_with_early_stopping,
+)
+
+from utils.evaluation_utils import (
+    calculate_binary_metrics,
+    find_best_threshold,
+    predict_probabilities,
+)
+```
+
+Then keep the model class in the notebook:
+
+```python
+class CNN1DClassifier(nn.Module):
+    ...
+```
+
+Train:
+
+```python
+set_seed(42)
+
+model = CNN1DClassifier().to(device)
+
+pos_weight = calculate_pos_weight(
+    y_train,
+    device,
+)
+
+criterion = nn.BCEWithLogitsLoss(
+    pos_weight=pos_weight,
+)
+
+optimizer = torch.optim.Adam(
+    model.parameters(),
+    lr=1e-3,
+    weight_decay=1e-4,
+)
+
+model, history = train_with_early_stopping(
+    model=model,
+    train_loader=train_loader,
+    validation_loader=validation_loader,
+    criterion=criterion,
+    optimizer=optimizer,
+    device=device,
+    max_epochs=50,
+    patience=8,
+)
+```
+
+Then evaluate:
+
+```python
+validation_probabilities, validation_labels = (
+    predict_probabilities(
+        model,
+        validation_loader,
+        device,
+    )
+)
+
+threshold, validation_macro_f1 = find_best_threshold(
+    validation_labels,
+    validation_probabilities,
+)
+
+test_probabilities, test_labels = predict_probabilities(
+    model,
+    test_loader,
+    device,
+)
+
+test_metrics = calculate_binary_metrics(
+    test_labels,
+    test_probabilities,
+    threshold,
+)
+```
+
+That is still easy to explain:
+
+> “I define the model here. Then I call the same controlled training pipeline used by all models. The utility implements early stopping, gradient clipping, and loss calculation consistently.”
+
+# Why this is better scientifically
+
+With duplicated loops, you might accidentally have:
+
+```text
+CNN: gradient clipping enabled
+RNN: gradient clipping forgotten
+LSTM: best weights restored
+GRU: last epoch used
+CNN-GRU: threshold fixed at 0.5
+```
+
+Then the comparison is not fair.
+
+A shared utility ensures:
+
+```text
+Same training loop
+Same early stopping
+Same threshold search
+Same metric implementation
+Same prediction procedure
+```
+
+Only these things should differ:
+
+* model architecture,
+* model-specific hyperparameters,
+* whether gradient clipping is needed,
+* MLP versus sequence input representation.
+
+# Best compromise for your professor
+
+Do not hide the utilities completely. In each notebook, add a Markdown section:
+
+```markdown
+## Shared training protocol
+
+All model families use the same training and evaluation utilities to ensure
+a fair comparison. The utilities implement:
+
+- deterministic random seeds,
+- one-epoch training,
+- validation loss,
+- early stopping,
+- optional gradient clipping,
+- probability prediction,
+- validation-based threshold selection,
+- common evaluation metrics.
+
+The model architecture itself is defined below because it is the main
+model-specific component of this notebook.
+```
+
+You can also display their source in the notebook when presenting:
+
+```python
+import inspect
+from utils.training_utils import train_with_early_stopping
+
+print(
+    inspect.getsource(
+        train_with_early_stopping
+    )
+)
+```
+
+But you normally do not need to print the source in every executed notebook.
+
+## My recommendation
+
+Use this division:
+
+```text
+Notebooks
+→ explanations
+→ model classes
+→ model configuration
+→ calls to training/evaluation
+→ plots and interpretation
+
+utils/
+→ repeated training loops
+→ repeated metrics
+→ artifact saving
+```
+
+This is more professional and makes your comparison more trustworthy without making the notebooks difficult to explain.

@@ -7,8 +7,8 @@ import random
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
+import numpy as np
 
 
 def set_seed(seed: int = 42) -> None:

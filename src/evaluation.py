@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Callable
 
+import torch
 import numpy as np
 import pandas as pd
-import torch
 from sklearn.metrics import (
     average_precision_score,
     confusion_matrix,

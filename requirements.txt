@@ -1,8 +1,13 @@
 matplotlib
 joblib
+jupyter
+ipykernel
 numpy
 pandas
+plotly
 scikit-learn
 scipy
 shap
+streamlit
 torch
+tqdm

@@ -7,10 +7,10 @@ import pickle
 from dataclasses import dataclass
 from pathlib import Path
 
+import torch
 import joblib
 import numpy as np
 import pandas as pd
-import torch
 from scipy.signal import find_peaks, resample_poly
 from scipy.stats import kurtosis, skew
 from sklearn.preprocessing import StandardScaler
@@ -23,6 +23,9 @@ from .config import (
     SPLIT_SUBJECTS,
     STRIDE_SAMPLES,
     TARGET_HZ,
+    TRAIN_SUBJECTS,
+    VALIDATION_SUBJECTS,
+    TEST_SUBJECTS,
     WINDOW_SAMPLES,
     WINDOW_SECONDS,
     STRIDE_SECONDS,
@@ -61,7 +64,7 @@ def align_subject_to_32hz(subject_data: dict) -> tuple[np.ndarray, np.ndarray, n
     bvp = _downsample_bvp_to_32hz(wrist["BVP"], n_samples)
     eda = _interp_to_target(wrist["EDA"], WRIST_SAMPLE_RATES["EDA"], target_times)
     temp = _interp_to_target(wrist["TEMP"], WRIST_SAMPLE_RATES["TEMP"], target_times)
-    acc = _interp_to_target(wrist["ACC"], WRIST_SAMPLE_RATES["ACC"], target_times)
+    acc = _align_acc_to_target(wrist["ACC"], n_samples)
     labels = label[np.minimum((target_times * LABEL_HZ).astype(int), len(label) - 1)]
 
     signals = np.column_stack(
@@ -120,6 +123,10 @@ def create_subject_windows(
 
 
 def run_preprocessing(project_root: Path) -> dict[str, object]:
+    assert set(TRAIN_SUBJECTS).isdisjoint(VALIDATION_SUBJECTS)
+    assert set(TRAIN_SUBJECTS).isdisjoint(TEST_SUBJECTS)
+    assert set(VALIDATION_SUBJECTS).isdisjoint(TEST_SUBJECTS)
+
     data_root = project_root / "data" / "WESAD" / "WESAD"
     sequence_dir = project_root / "data" / "processed" / "sequence"
     metadata_dir = project_root / "data" / "processed" / "metadata"
@@ -160,6 +167,13 @@ def run_preprocessing(project_root: Path) -> dict[str, object]:
         for split, parts in metadata_frames.items()
     }
     X_sequence, sequence_scaler = fit_transform_sequences(X_raw["train"], X_raw)
+
+    assert X_sequence["train"].shape[1:] == (WINDOW_SAMPLES, len(SEQUENCE_CHANNELS))
+    assert X_sequence["validation"].shape[1:] == (WINDOW_SAMPLES, len(SEQUENCE_CHANNELS))
+    assert X_sequence["test"].shape[1:] == (WINDOW_SAMPLES, len(SEQUENCE_CHANNELS))
+    assert np.isfinite(X_sequence["train"]).all()
+    assert np.isfinite(X_sequence["validation"]).all()
+    assert np.isfinite(X_sequence["test"]).all()
 
     for split in SPLIT_SUBJECTS:
         torch.save(torch.from_numpy(X_raw[split]), sequence_dir / f"X_{split}_raw.pt")
@@ -288,6 +302,21 @@ def _downsample_bvp_to_32hz(values: np.ndarray, n_samples: int) -> np.ndarray:
         target_times = np.arange(n_samples, dtype=np.float64) / float(TARGET_HZ)
         downsampled = np.interp(target_times, source_times, downsampled).astype(np.float32)
     return downsampled[:n_samples, None]
+
+
+def _align_acc_to_target(values: np.ndarray, n_samples: int) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float32)
+    if values.ndim == 1:
+        values = values[:, None]
+    if values.shape[0] >= n_samples:
+        return values[:n_samples].astype(np.float32)
+    source_times = np.arange(values.shape[0], dtype=np.float64) / float(WRIST_SAMPLE_RATES["ACC"])
+    target_times = np.arange(n_samples, dtype=np.float64) / float(TARGET_HZ)
+    channels = [
+        np.interp(target_times, source_times, values[:, channel]).astype(np.float32)
+        for channel in range(values.shape[1])
+    ]
+    return np.column_stack(channels)
 
 
 def _accepted_label_segments(labels: np.ndarray) -> list[tuple[int, int, int]]:

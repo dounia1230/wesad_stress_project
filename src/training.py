@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-import pandas as pd
 import torch
+import pandas as pd
 
 from .helpers import save_json
 

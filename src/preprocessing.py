@@ -245,7 +245,11 @@ def fit_transform_sequences(
     scaler.fit(X_train.reshape(-1, X_train.shape[-1]))
     transformed = {}
     for split, X in splits.items():
-        transformed[split] = scaler.transform(X.reshape(-1, X.shape[-1])).reshape(X.shape).astype(np.float32)
+        transformed[split] = (
+            scaler.transform(X.reshape(-1, X.shape[-1]))
+            .reshape(X.shape)
+            .astype(np.float32)
+        )
     return transformed, scaler
 
 
@@ -398,7 +402,11 @@ def _bvp_features(bvp: np.ndarray) -> dict[str, float]:
 
 def _eda_features(eda: np.ndarray) -> dict[str, float]:
     diff = np.diff(eda)
-    peaks, _ = find_peaks(eda, distance=max(1, TARGET_HZ), prominence=max(float(np.std(eda)) * 0.25, 1e-6))
+    peaks, _ = find_peaks(
+        eda,
+        distance=max(1, TARGET_HZ),
+        prominence=max(float(np.std(eda)) * 0.25, 1e-6),
+    )
     return {
         "EDA_peak_count": float(len(peaks)),
         "EDA_mean_abs_derivative": float(np.mean(np.abs(diff))) if len(diff) else 0.0,

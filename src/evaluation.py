@@ -54,7 +54,9 @@ def select_threshold(y_true: np.ndarray, probabilities: np.ndarray) -> tuple[flo
             {
                 "threshold": float(round(threshold, 2)),
                 "macro_f1": float(f1_score(y_true, predicted, average="macro", zero_division=0)),
-                "weighted_f1": float(f1_score(y_true, predicted, average="weighted", zero_division=0)),
+                "weighted_f1": float(
+                    f1_score(y_true, predicted, average="weighted", zero_division=0)
+                ),
                 "stress_precision": float(precision[1]),
                 "stress_recall": float(recall[1]),
                 "distance_from_0_5": abs(float(round(threshold, 2)) - 0.5),
@@ -66,7 +68,11 @@ def select_threshold(y_true: np.ndarray, probabilities: np.ndarray) -> tuple[flo
     return float(best_row["threshold"]), table
 
 
-def binary_metrics(y_true: np.ndarray, probabilities: np.ndarray, threshold: float) -> dict[str, object]:
+def binary_metrics(
+    y_true: np.ndarray,
+    probabilities: np.ndarray,
+    threshold: float,
+) -> dict[str, object]:
     y_true, probabilities = _validate_binary_arrays(y_true, probabilities)
     predicted = (probabilities >= threshold).astype(int)
     precision, recall, _, _ = precision_recall_fscore_support(

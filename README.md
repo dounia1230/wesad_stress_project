@@ -49,6 +49,8 @@ selected_imbalance_method: no_correction
 
 This gap is expected to be discussed rather than hidden: WESAD has a small subject count, so per-subject generalization can vary substantially.
 
+The CNN is the protocol winner because selection is based on validation macro F1. The MLP's stronger test score is still meaningful: the validation split has only two subjects and may favor sequence patterns that do not transfer as well to the three held-out test subjects. The MLP uses aggregated statistical features plus duplicate, constant, and correlation filtering, which can reduce subject-specific temporal noise. Report the CNN as validation-selected, but discuss the MLP result as evidence that subject-level generalization is unstable on a small dataset.
+
 ## Repository Layout
 
 ```text
@@ -57,6 +59,7 @@ This gap is expected to be discussed rather than hidden: WESAD has a small subje
 |-- requirements.txt
 |-- src/
 |   |-- config.py                  # Shared constants and experiment settings
+|   |-- models.py                  # Model architecture classes
 |   |-- preprocessing.py           # Signal alignment, windowing, feature extraction
 |   |-- training.py                # Train/eval loops and early stopping
 |   |-- evaluation.py              # Metrics, probabilities, prediction tables
@@ -234,7 +237,7 @@ The complete research workflow is in the notebooks. The app can be extended late
 
 - Raw WESAD data, processed tensors, scalers, trained weights, and most generated artifacts are ignored by Git.
 - Re-run notebooks in order to regenerate local artifacts.
-- Model notebooks define model classes inline for presentation clarity.
+- Model classes live in `src/models.py` and are imported by the notebooks.
 - Shared reusable code lives in `src/`.
 - The project is designed for transparent experimentation, not production deployment.
 

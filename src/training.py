@@ -125,9 +125,13 @@ def pos_weight_from_labels(y_train: torch.Tensor, device: torch.device) -> torch
     number_negative = (y == 0).sum().item()
     number_positive = (y == 1).sum().item()
     if number_negative == 0:
-        raise ValueError("Cannot compute pos_weight because the training set has no negative labels.")
+        raise ValueError(
+            "Cannot compute pos_weight because the training set has no negative labels."
+        )
     if number_positive == 0:
-        raise ValueError("Cannot compute pos_weight because the training set has no positive labels.")
+        raise ValueError(
+            "Cannot compute pos_weight because the training set has no positive labels."
+        )
     return torch.tensor([number_negative / number_positive], dtype=torch.float32, device=device)
 
 

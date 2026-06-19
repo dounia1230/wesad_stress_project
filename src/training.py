@@ -68,6 +68,7 @@ def train_with_early_stopping(
     max_epochs: int = 50,
     patience: int = 8,
     gradient_clip: float | None = None,
+    verbose: bool = True,
 ) -> tuple[torch.nn.Module, pd.DataFrame, dict[str, Any]]:
     best_state = None
     best_validation_loss = float("inf")
@@ -102,10 +103,26 @@ def train_with_early_stopping(
                 for key, value in model.state_dict().items()
             }
             epochs_without_improvement = 0
+            improved = True
         else:
             epochs_without_improvement += 1
+            improved = False
+
+        if verbose:
+            marker = " *" if improved else ""
+            print(
+                f"Epoch {epoch:03d}/{max_epochs:03d} | "
+                f"train_loss={train_loss:.4f} | "
+                f"validation_loss={validation_loss:.4f} | "
+                f"best_epoch={best_epoch}{marker}"
+            )
 
         if epochs_without_improvement >= patience:
+            if verbose:
+                print(
+                    f"Early stopping after {epoch} epochs "
+                    f"(no validation-loss improvement for {patience} epochs)."
+                )
             break
 
     if best_state is not None:

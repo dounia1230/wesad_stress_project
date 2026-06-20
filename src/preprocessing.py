@@ -229,6 +229,11 @@ def run_preprocessing(project_root: Path) -> dict[str, object]:
 
     return {
         "sequence_shapes": {split: tuple(X_sequence[split].shape) for split in SPLIT_SUBJECTS},
+        "windows_per_subject": {
+            subject_id: int((all_metadata["subject_id"] == subject_id).sum())
+            for subjects in SPLIT_SUBJECTS.values()
+            for subject_id in subjects
+        },
         "label_counts": {
             split: pd.Series(y[split]).value_counts().sort_index().to_dict()
             for split in SPLIT_SUBJECTS

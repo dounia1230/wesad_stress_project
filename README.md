@@ -1,6 +1,6 @@
 # WESAD Stress Classification
 
-PyTorch research project for binary stress classification on WESAD wrist signals. The repository builds leakage-safe subject splits, preprocesses multimodal wearable signals, trains seven neural architectures, compares validation-selected variants, and saves reproducible metrics and artifacts.
+PyTorch research project for binary stress classification on WESAD wrist signals. The repository builds leakage-safe subject splits, preprocesses multimodal wearable signals, trains five neural architectures, compares validation-selected variants, and saves reproducible metrics and artifacts.
 
 This is a research demonstration, not a medical diagnostic tool.
 
@@ -15,8 +15,8 @@ This is a research demonstration, not a medical diagnostic tool.
 - Compares:
   - MLP on extracted statistical features
   - CNN on sequence windows
-  - RNN, LSTM, GRU
-  - CNN-LSTM and CNN-GRU hybrids
+  - RNN and LSTM
+  - CNN-LSTM hybrid
 - Trains each model with and without class-weighted loss
 - Selects the final variant by validation macro F1, then reports held-out test metrics
 - Saves preprocessing artifacts, trained model artifacts, predictions, metrics, plots, and SHAP explanations
@@ -71,9 +71,7 @@ The CNN is the protocol winner because selection is based on validation macro F1
 |   |-- 03_cnn.ipynb
 |   |-- 04_rnn.ipynb
 |   |-- 05_lstm.ipynb
-|   |-- 06_gru.ipynb
 |   |-- 07_cnn_lstm.ipynb
-|   |-- 08_cnn_gru.ipynb
 |   `-- 09_model_comparison.ipynb
 |-- data/                          # Local raw and processed data, ignored by Git
 |-- artifacts/                     # Generated scalers, models, metrics, ignored by Git
@@ -137,9 +135,7 @@ Run notebooks from a fresh kernel in this order:
 03_cnn.ipynb
 04_rnn.ipynb
 05_lstm.ipynb
-06_gru.ipynb
 07_cnn_lstm.ipynb
-08_cnn_gru.ipynb
 09_model_comparison.ipynb
 ```
 

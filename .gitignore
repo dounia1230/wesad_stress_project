@@ -1,5 +1,8 @@
 __pycache__/
 *.pyc
+.venv/
+venv/
+.env
 .ipynb_checkpoints/
 data/WESAD/
 models/*.pt
@@ -8,6 +11,7 @@ data/processed/
 artifacts/models/
 artifacts/preprocessing/
 artifacts/results/
+reports/figures/rnn_gradient_clipping/
 *.pkl
 *.npz
 *.joblib

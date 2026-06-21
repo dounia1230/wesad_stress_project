@@ -1,4 +1,7 @@
-"""Create notebooks 10--14 from reviewable source cells."""
+"""Create the CNN2D notebooks 10--12 from reviewable source cells.
+
+Notebooks 13 and 14 are finalized by ``finalize_four_model_notebooks.py``.
+"""
 
 from __future__ import annotations
 
@@ -188,21 +191,18 @@ assert (64 + 2 - 3) // 1 + 1 == 64
 """),
         md("## Modèles réutilisables et nombre de paramètres"),
         code(r"""
-from src.models import FlattenedScalogramMLP, WESADScalogramCNN
+from src.models import WESADScalogramCNN
 
 cnn2d = WESADScalogramCNN().to(device)
-flat_mlp = FlattenedScalogramMLP().to(device)
 toy = torch.randn(4, 3, 64, 64, device=device)
 assert cnn2d(toy).shape == (4, 1)
-assert flat_mlp(toy).shape == (4, 1)
 print("CNN 2D :", count_parameters(cnn2d), "paramètres")
-print("MLP aplati :", count_parameters(flat_mlp), "paramètres")
 print("Périphérique modèle :", next(cnn2d.parameters()).device)
 print("Périphérique lot :", toy.device)
 assert next(cnn2d.parameters()).device == toy.device
 """),
         md(r"""
-Le MLP reçoit exactement 12 288 valeurs et ne code pas explicitement la localité 2D. Le CNN emploie des champs récepteurs locaux et partage ses poids. Le nombre de paramètres doit accompagner les mesures de performance.
+Le CNN emploie des champs récepteurs locaux et partage ses poids sur les deux dimensions temps-fréquence. Le nombre de paramètres accompagne les mesures de performance.
 """),
         md("## Chargement du jeu de scalogrammes"),
         code(r"""
@@ -262,16 +262,6 @@ if RUN_CNN2D_TRAINING:
         device,
         compare_weighted_loss=True,
     )
-    results["scalogram_mlp"] = run_validation_selected_experiment(
-        FlattenedScalogramMLP,
-        datasets,
-        validation_metadata,
-        test_metadata,
-        PROJECT_ROOT / "artifacts" / "models" / "scalogram_mlp",
-        {**common, "model_class": "FlattenedScalogramMLP", "architecture": "12288-256-64-1"},
-        device,
-        compare_weighted_loss=True,
-    )
 else:
     print("Non exécuté : activer RUN_CNN2D_TRAINING pour les données réelles.")
 """),
@@ -302,13 +292,16 @@ else:
 """),
         md("## Sauvegarde par `state_dict` et contrôle du rechargement"),
         code(r"""
-if RUN_CNN2D_TRAINING:
+checkpoint_path = PROJECT_ROOT / "artifacts/models/cnn2d/best_model.pt"
+if datasets is not None and checkpoint_path.exists():
     batch = next(iter(torch.utils.data.DataLoader(datasets[2], batch_size=4)))[0].to(device)
-    trained = results["cnn2d"]["model"].eval()
+    trained = WESADScalogramCNN().to(device)
+    trained.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=True))
+    trained.eval()
     with torch.no_grad():
         logits_before = trained(batch)
     reloaded = WESADScalogramCNN().to(device)
-    reloaded.load_state_dict(torch.load(PROJECT_ROOT / "artifacts/models/cnn2d/best_model.pt", map_location=device, weights_only=True))
+    reloaded.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=True))
     reloaded.eval()
     with torch.no_grad():
         logits_after = reloaded(batch)
@@ -327,7 +320,7 @@ Chaque expérience modifie un seul facteur par rapport à la référence : paddi
 """),
         code(SETUP),
         code(r"""
-from src.models import FlattenedScalogramMLP, WESADScalogramCNN
+from src.models import WESADScalogramCNN
 from src.scalograms import WESADScalogramDataset
 from src.experiments import run_validation_selected_experiment
 from src.visualization import extract_feature_maps
@@ -373,7 +366,7 @@ if RUN_ABLATIONS:
 else:
     print("Non exécuté : activer RUN_ABLATIONS après le notebook 10.")
 """),
-        md("## Tableau d'ablation et comparaison avec le MLP sur scalogrammes"),
+        md("## Tableau d'ablation CNN 2D"),
         code(r"""
 def artifact_row(name, path):
     with open(path / "model_config.json", encoding="utf-8") as f: config = json.load(f)
@@ -395,7 +388,6 @@ def artifact_row(name, path):
     }
 
 paths = {name: PROJECT_ROOT / "artifacts/models/cnn2d_ablations" / name for name in ABlations}
-paths.update({"flattened_scalogram_mlp": PROJECT_ROOT / "artifacts/models/scalogram_mlp"})
 rows = [artifact_row(name, path) for name, path in paths.items() if (path / "model_config.json").exists()]
 ablation_table = pd.DataFrame(rows)
 display(ablation_table.sort_values("validation macro F1", ascending=False) if len(ablation_table) else "Aucun artefact d'ablation.")
@@ -406,12 +398,13 @@ display(ablation_table.sort_values("validation macro F1", ascending=False) if le
 Les hooks sont retirés immédiatement après l'inférence. Les images ci-dessous sont des activations apprises, et non une preuve physiologique directe. Une formulation prudente est : « cette carte répond fortement à un motif temps-fréquence localisé ». Les réponses peuvent coïncider avec des structures BVP périodiques, des variations EDA lentes, une activité d'accélération rapide ou des bandes larges/étroites, sans autoriser une interprétation causale.
 """),
         code(r"""
-RUN_FEATURE_MAPS = False
+feature_checkpoint = PROJECT_ROOT / "artifacts/models/cnn2d/best_model.pt"
+RUN_FEATURE_MAPS = feature_checkpoint.exists()
 if RUN_FEATURE_MAPS:
     dataset = WESADScalogramDataset(scalogram_dir / "X_validation.pt", scalogram_dir / "y_validation.pt", metadata_dir / "windows_validation.csv")
     example, label, metadata = dataset[0]
     model = WESADScalogramCNN().to(device)
-    model.load_state_dict(torch.load(PROJECT_ROOT / "artifacts/models/cnn2d/best_model.pt", map_location=device, weights_only=True))
+    model.load_state_dict(torch.load(feature_checkpoint, map_location=device, weights_only=True))
     maps = extract_feature_maps(model, example[None], [model.features[0], model.features[8]])
     fig, axes = plt.subplots(1, 3, figsize=(12, 3))
     for i, channel in enumerate(SCALOGRAM_CHANNELS):
@@ -676,5 +669,3 @@ if __name__ == "__main__":
     notebook_10()
     notebook_11()
     notebook_12()
-    notebook_13()
-    notebook_14()

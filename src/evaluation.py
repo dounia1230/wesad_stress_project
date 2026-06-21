@@ -8,6 +8,7 @@ import torch
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
+    accuracy_score,
     average_precision_score,
     confusion_matrix,
     f1_score,
@@ -85,6 +86,7 @@ def binary_metrics(
         zero_division=0,
     )
     metrics: dict[str, object] = {
+        "accuracy": float(accuracy_score(y_true, predicted)),
         "macro_f1": float(f1_score(y_true, predicted, average="macro", zero_division=0)),
         "weighted_f1": float(f1_score(y_true, predicted, average="weighted", zero_division=0)),
         "non_stress_precision": float(precision[0]),

@@ -10,4 +10,6 @@ scipy
 shap
 streamlit
 torch
+torchvision
 tqdm
+PyWavelets

@@ -29,7 +29,10 @@ def collect_probabilities(
     probabilities: list[np.ndarray] = []
     labels: list[np.ndarray] = []
     with torch.no_grad():
-        for batch_x, batch_y in loader:
+        for batch in loader:
+            if not isinstance(batch, (tuple, list)) or len(batch) < 2:
+                raise ValueError("A supervised batch must contain inputs and labels.")
+            batch_x, batch_y = batch[0], batch[1]
             batch_x = batch_x.to(device)
             logits = model(batch_x)
             probabilities.append(logits_to_probabilities(logits).cpu().numpy())

@@ -52,3 +52,12 @@ LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-4
 MAX_EPOCHS = 100
 PATIENCE = 10
+
+# Time-frequency representation. These values are the single source of truth for
+# notebooks 10--12 and are deliberately shared across all three modalities.
+SCALOGRAM_CHANNELS = ["BVP", "EDA", "ACC_magnitude"]
+SCALOGRAM_WAVELET = "morl"
+SCALOGRAM_SCALES = tuple(range(1, 65))
+SCALOGRAM_SIZE = (64, 64)
+SCALOGRAM_DIR = PROJECT_ROOT / "data" / "processed" / "scalograms"
+SCALOGRAM_ARTIFACT_DIR = PROJECT_ROOT / "artifacts" / "preprocessing" / "scalograms"

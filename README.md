@@ -1,6 +1,6 @@
 # WESAD Stress Classification
 
-PyTorch research project for binary stress classification on WESAD wrist signals. The repository builds leakage-safe subject splits, preprocesses multimodal wearable signals, trains five neural architectures, compares validation-selected variants, and saves reproducible metrics and artifacts.
+PyTorch research project for binary stress classification on WESAD wrist signals. The repository builds leakage-safe subject splits, preprocesses multimodal wearable signals, trains four neural architectures, compares validation-selected variants, and saves reproducible metrics and artifacts.
 
 This is a research demonstration, not a medical diagnostic tool.
 
@@ -14,9 +14,8 @@ This is a research demonstration, not a medical diagnostic tool.
 - Creates 30-second windows with a 15-second stride at 32 Hz
 - Compares:
   - MLP on extracted statistical features
-  - CNN on sequence windows
+  - CNN 2D on three-channel CWT scalograms
   - RNN and LSTM
-  - CNN-LSTM hybrid
 - Trains each model with and without class-weighted loss
 - Selects the final variant by validation macro F1, then reports held-out test metrics
 - Saves preprocessing artifacts, trained model artifacts, predictions, metrics, plots, and SHAP explanations
@@ -28,17 +27,6 @@ The final comparison notebook writes `artifacts/results/all_model_metrics.csv` a
 Current validation-selected model:
 
 ```text
-model: cnn
-validation_macro_f1: 0.9093
-test_macro_f1: 0.5812
-stress_precision: 0.4160
-stress_recall: 0.4063
-selected_imbalance_method: class_weight
-```
-
-The MLP has lower validation macro F1 but stronger held-out test metrics in the current run:
-
-```text
 model: mlp
 validation_macro_f1: 0.9061
 test_macro_f1: 0.8564
@@ -47,9 +35,18 @@ stress_recall: 0.6797
 selected_imbalance_method: no_correction
 ```
 
-This gap is expected to be discussed rather than hidden: WESAD has a small subject count, so per-subject generalization can vary substantially.
+Current CNN 2D result:
 
-The CNN is the protocol winner because selection is based on validation macro F1. The MLP's stronger test score is still meaningful: the validation split has only two subjects and may favor sequence patterns that do not transfer as well to the three held-out test subjects. The MLP uses aggregated statistical features plus duplicate, constant, and correlation filtering, which can reduce subject-specific temporal noise. Report the CNN as validation-selected, but discuss the MLP result as evidence that subject-level generalization is unstable on a small dataset.
+```text
+model: cnn2d
+validation_macro_f1: 0.8626
+test_macro_f1: 0.8440
+stress_precision: 0.9535
+stress_recall: 0.6406
+selected_imbalance_method: weighted
+```
+
+Model selection remains based on validation macro F1. Test metrics are reported only after the model, loss weighting, and classification threshold are frozen.
 
 ## Repository Layout
 
@@ -68,11 +65,13 @@ The CNN is the protocol winner because selection is based on validation macro F1
 |   |-- 00_data_exploration.ipynb
 |   |-- 01_preprocessing_and_splits.ipynb
 |   |-- 02_mlp.ipynb
-|   |-- 03_cnn.ipynb
 |   |-- 04_rnn.ipynb
 |   |-- 05_lstm.ipynb
-|   |-- 07_cnn_lstm.ipynb
-|   `-- 09_model_comparison.ipynb
+|   |-- 10_wesad_scalogram_generation.ipynb
+|   |-- 11_cnn2d_scalogram_experiments.ipynb
+|   |-- 12_cnn2d_ablation_and_feature_maps.ipynb
+|   |-- 13_rnn_bptt_gradient_clipping.ipynb
+|   `-- 14_model_comparison.ipynb
 |-- data/                          # Local raw and processed data, ignored by Git
 |-- artifacts/                     # Generated scalers, models, metrics, ignored by Git
 `-- reports/                       # Generated figures and tables
@@ -132,12 +131,20 @@ Run notebooks from a fresh kernel in this order:
 00_data_exploration.ipynb
 01_preprocessing_and_splits.ipynb
 02_mlp.ipynb
-03_cnn.ipynb
 04_rnn.ipynb
 05_lstm.ipynb
-07_cnn_lstm.ipynb
-09_model_comparison.ipynb
+10_wesad_scalogram_generation.ipynb
+11_cnn2d_scalogram_experiments.ipynb
+12_cnn2d_ablation_and_feature_maps.ipynb
+13_rnn_bptt_gradient_clipping.ipynb
+14_model_comparison.ipynb
 ```
+
+Notebook 10 derives BVP, EDA, and acceleration-magnitude Morlet scalograms from
+the already standardized sequence windows. Scalogram normalization is fitted on
+training subjects only. Notebooks 11--13 perform model and threshold selection
+exclusively on validation data; notebook 14 loads saved artifacts without
+retraining.
 
 The model notebooks assume preprocessing has already written processed tensors and metadata under `data/processed/`.
 

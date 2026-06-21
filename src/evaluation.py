@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Callable
 
 import torch
@@ -123,8 +124,8 @@ def per_subject_metrics(
         observed_subjects.add(subject_id)
         rows.append(
             {
-                "subject_id": subject_id,
-                "n_windows": int(len(group)),
+                "subject": subject_id,
+                "n_samples": int(len(group)),
                 **binary_metrics(
                     group["y_true"].to_numpy(),
                     group["probability"].to_numpy(),
@@ -135,7 +136,27 @@ def per_subject_metrics(
     if observed_subjects != expected_subjects:
         missing = sorted(expected_subjects - observed_subjects)
         raise ValueError(f"Missing per-subject metrics for subjects: {missing}")
-    return pd.DataFrame(rows)
+    result = pd.DataFrame(rows)
+    validate_per_subject_columns(result)
+    return result
+
+
+def validate_per_subject_columns(per_subject_df: pd.DataFrame) -> None:
+    """Validate the canonical schema shared by all final-model artifacts."""
+    required_columns = {
+        "subject",
+        "n_samples",
+        "accuracy",
+        "macro_f1",
+        "weighted_f1",
+        "stress_precision",
+        "stress_recall",
+        "roc_auc",
+        "average_precision",
+    }
+    missing = required_columns.difference(per_subject_df.columns)
+    if missing:
+        raise ValueError(f"Missing per-subject columns: {sorted(missing)}")
 
 
 def prediction_table(
@@ -163,11 +184,23 @@ def _safe_score(
     scorer: Callable[[np.ndarray, np.ndarray], float],
     y_true: np.ndarray,
     probabilities: np.ndarray,
-) -> float | None:
+) -> float:
+    if scorer is roc_auc_score and np.unique(y_true).size < 2:
+        warnings.warn(
+            "roc_auc is unavailable because this subset contains only one target class; returning NaN.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return float("nan")
     try:
         return float(scorer(y_true, probabilities))
-    except ValueError:
-        return None
+    except ValueError as error:
+        warnings.warn(
+            f"{getattr(scorer, '__name__', 'metric')} is unavailable for this subset: {error}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return float("nan")
 
 
 def _validate_binary_arrays(

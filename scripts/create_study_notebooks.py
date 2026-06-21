@@ -322,7 +322,7 @@ Chaque expérience modifie un seul facteur par rapport à la référence : paddi
         code(r"""
 from src.models import WESADScalogramCNN
 from src.scalograms import WESADScalogramDataset
-from src.experiments import run_validation_selected_experiment
+from src.experiments import evaluate_frozen_test_model, run_validation_selected_experiment
 from src.visualization import extract_feature_maps
 
 scalogram_dir = PROJECT_ROOT / "data/processed/scalograms"
@@ -341,7 +341,7 @@ pd.DataFrame(ABlations).T
 Le pas 2 est appliqué uniquement à la première convolution. La référence avec pas 1, les deux valeurs de padding, les deux poolings, les deux capacités et l'ajout 1 × 1 forment des comparaisons contrôlées.
 """),
         code(r"""
-RUN_ABLATIONS = False
+RUN_ABLATIONS = True
 ablation_results = {}
 if RUN_ABLATIONS:
     datasets = tuple(WESADScalogramDataset(
@@ -361,8 +361,20 @@ if RUN_ABLATIONS:
                 "seed": RANDOM_SEED, "subject_split": SPLIT_SUBJECTS,
                 "input_channels": SCALOGRAM_CHANNELS, "input_shape": [3, 64, 64],
                 "normalization_statistics": "artifacts/preprocessing/scalograms/scalogram_metadata.json",
-            }, device, compare_weighted_loss=False,
+            }, device, compare_weighted_loss=False, evaluate_test=False,
         )
+    selected_ablation = max(
+        ablation_results,
+        key=lambda name: ablation_results[name]["validation_metrics"]["macro_f1"],
+    )
+    ablation_results[selected_ablation] = evaluate_frozen_test_model(
+        ablation_results[selected_ablation],
+        datasets,
+        test_meta,
+        PROJECT_ROOT / "artifacts/models/cnn2d_ablations" / selected_ablation,
+        device,
+    )
+    print("Architecture sélectionnée sur validation :", selected_ablation)
 else:
     print("Non exécuté : activer RUN_ABLATIONS après le notebook 10.")
 """),
@@ -371,7 +383,8 @@ else:
 def artifact_row(name, path):
     with open(path / "model_config.json", encoding="utf-8") as f: config = json.load(f)
     with open(path / "validation_metrics.json", encoding="utf-8") as f: val = json.load(f)
-    with open(path / "test_metrics.json", encoding="utf-8") as f: test = json.load(f)
+    test_path = path / "test_metrics.json"
+    test = json.loads(test_path.read_text(encoding="utf-8")) if test_path.exists() else {}
     with open(path / "training_summary.json", encoding="utf-8") as f: summary = json.load(f)
     arch = config.get("architecture", {})
     return {
@@ -416,250 +429,6 @@ if RUN_FEATURE_MAPS:
             ax.axis("off")
             if i < count: ax.imshow(activation[0, i], aspect="auto", origin="lower", cmap="magma"); ax.set_title(f"Carte {i+1}")
         fig.suptitle(title); plt.show()
-"""),
-    ])
-
-
-def notebook_13() -> None:
-    write("13_rnn_bptt_gradient_clipping.ipynb", [
-        md(r"""
-# 13 — RNN, LSTM, BPTT et écrêtage du gradient
-
-La tâche reste une classification séquentielle plusieurs-vers-un : 960 mesures successives et 6 canaux produisent une seule classe binaire. Toutes les fenêtres possèdent une longueur fixe de 960 pas temporels. Aucun padding ni masque n'est donc nécessaire dans cette expérience.
-"""),
-        code(SETUP),
-        md(r"""
-## Rétropropagation à travers le temps
-
-Un RNN simple calcule
-
-\[
-h_t=\phi(W_{xh}x_t+W_{hh}h_{t-1}+b_h),\qquad z=W_{hy}h_{960}+b_y.
-\]
-
-Le réseau est conceptuellement déplié sur 960 pas. BPTT applique la règle de dérivation en chaîne depuis la perte vers chaque état antérieur. Une contribution au gradient contient des produits répétés de Jacobiennes récurrentes,
-
-\[
-\frac{\partial h_T}{\partial h_t}=\prod_{k=t+1}^{T}\frac{\partial h_k}{\partial h_{k-1}}.
-\]
-
-Si leurs valeurs singulières effectives restent inférieures à un, ce produit tend vers zéro (gradient évanescent) ; si elles sont durablement supérieures à un, il peut croître brutalement (gradient explosif). Les portes d'entrée, d'oubli et de sortie du LSTM, ainsi que son chemin de cellule mémoire, peuvent faciliter la conservation d'information sur une longue portée, sans garantir la généralisation.
-
-L'écrêtage par norme remplace un gradient trop grand par une version remise à l'échelle. Il limite les mises à jour excessives et peut stabiliser l'optimisation. Il ne restaure pas un gradient déjà évanescent et ne résout ni le déséquilibre de classes ni la variabilité inter-sujets.
-"""),
-        md("## Inspection et comparaison équitable"),
-        code(r"""
-from src.models import LSTMClassifier, SimpleRNNClassifier
-from src.training import compute_global_gradient_norm
-
-HIDDEN_SIZE = 32
-rnn = SimpleRNNClassifier(input_size=6, hidden_size=HIDDEN_SIZE).to(device)
-lstm = LSTMClassifier(input_size=6, hidden_size=HIDDEN_SIZE).to(device)
-inspection = pd.DataFrame([
-    {"model": "RNN", "hidden size": rnn.rnn.hidden_size, "layers": rnn.rnn.num_layers, "bidirectional": rnn.rnn.bidirectional, "parameters": count_parameters(rnn)},
-    {"model": "LSTM", "hidden size": lstm.lstm.hidden_size, "layers": lstm.lstm.num_layers, "bidirectional": lstm.lstm.bidirectional, "parameters": count_parameters(lstm)},
-])
-display(inspection)
-toy = torch.randn(2, 960, 6, device=device)
-assert rnn(toy).shape == lstm(toy).shape == (2, 1)
-assert next(rnn.parameters()).device == toy.device
-print("Périphérique modèle :", next(rnn.parameters()).device, "| lot :", toy.device)
-"""),
-        md(r"""
-Les deux cœurs utilisent ici la même taille cachée, une couche, le même sens, les mêmes fenêtres normalisées, lots, optimiseur, taux, régularisation, patience, seuil de validation et graine. Le LSTM possède davantage de paramètres à cause de ses portes. Les sorties sont des logits bruts et la perte est `BCEWithLogitsLoss`.
-"""),
-        code(r"""
-from torch.utils.data import TensorDataset
-from src.experiments import run_validation_selected_experiment
-
-sequence_dir = PROJECT_ROOT / "data/processed/sequence"
-metadata_dir = PROJECT_ROOT / "data/processed/metadata"
-
-def load_sequence_datasets():
-    return tuple(TensorDataset(
-        torch.load(sequence_dir / f"X_{split}.pt", map_location="cpu", weights_only=True),
-        torch.load(sequence_dir / f"y_{split}.pt", map_location="cpu", weights_only=True),
-    ) for split in ("train", "validation", "test"))
-
-datasets = load_sequence_datasets() if (sequence_dir / "X_train.pt").exists() else None
-validation_meta = pd.read_csv(metadata_dir / "windows_validation.csv") if datasets else None
-test_meta = pd.read_csv(metadata_dir / "windows_test.csv") if datasets else None
-"""),
-        md("## RNN sans écrêtage contre RNN avec norme maximale 1,0"),
-        code(r"""
-RUN_CLIPPING_EXPERIMENT = False
-clipping_results = {}
-if RUN_CLIPPING_EXPERIMENT:
-    common = {
-        "model_class": "SimpleRNNClassifier", "architecture": {"input_size": 6, "hidden_size": HIDDEN_SIZE, "layers": 1, "bidirectional": False},
-        "seed": RANDOM_SEED, "subject_split": SPLIT_SUBJECTS, "input_channels": SEQUENCE_CHANNELS,
-        "input_shape": [960, 6], "normalization_statistics": "artifacts/preprocessing/sequence_scaler.joblib",
-    }
-    for name, clip in [("without_clipping", None), ("clip_norm_1", 1.0)]:
-        try:
-            clipping_results[name] = run_validation_selected_experiment(
-                lambda: SimpleRNNClassifier(input_size=6, hidden_size=HIDDEN_SIZE), datasets,
-                validation_meta, test_meta, PROJECT_ROOT / "artifacts/models/rnn_clipping" / name,
-                common, device, compare_weighted_loss=False, gradient_clip=clip,
-                record_gradient_norms=True, record_validation_macro_f1=True,
-            )
-        except (FloatingPointError, RuntimeError) as error:
-            failure_dir = PROJECT_ROOT / "artifacts/models/rnn_clipping" / name
-            failure_dir.mkdir(parents=True, exist_ok=True)
-            with open(failure_dir / "numerical_failure.json", "w", encoding="utf-8") as handle:
-                json.dump({"numerically_stable": False, "error": str(error)}, handle, indent=2)
-            print(name, "arrêté honnêtement :", error)
-else:
-    print("Non exécuté : activer RUN_CLIPPING_EXPERIMENT pour l'expérience réelle.")
-"""),
-        md("## Tracés obligatoires"),
-        code(r"""
-figure_dir = PROJECT_ROOT / "reports/figures/rnn_gradient_clipping"
-figure_dir.mkdir(parents=True, exist_ok=True)
-history_paths = {
-    "sans écrêtage": PROJECT_ROOT / "artifacts/models/rnn_clipping/without_clipping/training_history.csv",
-    "norme max = 1.0": PROJECT_ROOT / "artifacts/models/rnn_clipping/clip_norm_1/training_history.csv",
-}
-histories = {name: pd.read_csv(path) for name, path in history_paths.items() if path.exists()}
-
-def plot_metric(column, title, ylabel, filename):
-    if not histories: return
-    fig, ax = plt.subplots(figsize=(7, 4))
-    for name, frame in histories.items():
-        if column in frame: ax.plot(frame.epoch, frame[column], label=name)
-    ax.set(title=title, xlabel="Époque", ylabel=ylabel); ax.legend(); fig.tight_layout()
-    fig.savefig(figure_dir / filename, dpi=150); plt.show()
-
-plot_metric("train_loss", "Perte d'entraînement", "BCE", "training_loss.png")
-plot_metric("validation_loss", "Perte de validation", "BCE", "validation_loss.png")
-plot_metric("validation_macro_f1", "Macro-F1 de validation", "Macro-F1", "validation_macro_f1.png")
-plot_metric("gradient_pre_max", "Norme pré-écrêtage maximale", "Norme L2", "gradient_pre_max.png")
-plot_metric("gradient_pre_median", "Norme pré-écrêtage médiane", "Norme L2", "gradient_pre_median.png")
-if "norme max = 1.0" in histories:
-    clipped = histories["norme max = 1.0"]
-    fig, ax = plt.subplots(figsize=(7, 4)); ax.plot(clipped.epoch, clipped.gradient_pre_mean, label="avant"); ax.plot(clipped.epoch, clipped.gradient_post_mean, label="après")
-    ax.set(title="Normes moyennes avant/après écrêtage", xlabel="Époque", ylabel="Norme L2"); ax.legend(); fig.tight_layout(); fig.savefig(figure_dir / "pre_vs_post.png", dpi=150); plt.show()
-"""),
-        md("## RNN contre LSTM et rechargement du RNN final"),
-        code(r"""
-RUN_FAIR_RNN_LSTM = False
-fair_results = {}
-if RUN_FAIR_RNN_LSTM:
-    common = {"seed": RANDOM_SEED, "subject_split": SPLIT_SUBJECTS, "input_channels": SEQUENCE_CHANNELS, "input_shape": [960, 6], "normalization_statistics": "artifacts/preprocessing/sequence_scaler.joblib"}
-    for name, factory in {
-        "rnn_fair": lambda: SimpleRNNClassifier(input_size=6, hidden_size=HIDDEN_SIZE),
-        "lstm_fair": lambda: LSTMClassifier(input_size=6, hidden_size=HIDDEN_SIZE),
-    }.items():
-        fair_results[name] = run_validation_selected_experiment(factory, datasets, validation_meta, test_meta,
-            PROJECT_ROOT / "artifacts/models" / name,
-            {**common, "model_class": name, "architecture": {"hidden_size": HIDDEN_SIZE, "layers": 1, "bidirectional": False}},
-            device, compare_weighted_loss=True)
-    rows = []
-    for name, result in fair_results.items():
-        rows.append({"model": name, "parameters": count_parameters(result["model"]),
-            "validation macro F1": result["validation_metrics"]["macro_f1"], "test macro F1": result["test_metrics"]["macro_f1"],
-            "weighted F1": result["test_metrics"]["weighted_f1"], "stress precision": result["test_metrics"]["stress_precision"],
-            "stress recall": result["test_metrics"]["stress_recall"], "ROC-AUC": result["test_metrics"]["roc_auc"],
-            "average precision": result["test_metrics"]["average_precision"], "best epoch": result["training_summary"]["best_epoch"],
-            "training time": result["training_summary"]["training_time_seconds"], "inference time": result["test_metrics"]["inference_time_seconds"]})
-    display(pd.DataFrame(rows))
-
-    final_rnn = fair_results["rnn_fair"]["model"].eval(); batch = datasets[2].tensors[0][:4].to(device)
-    with torch.no_grad(): before = final_rnn(batch)
-    reloaded = SimpleRNNClassifier(input_size=6, hidden_size=HIDDEN_SIZE).to(device)
-    reloaded.load_state_dict(torch.load(PROJECT_ROOT / "artifacts/models/rnn_fair/best_model.pt", map_location=device, weights_only=True)); reloaded.eval()
-    with torch.no_grad(): after = reloaded(batch)
-    torch.testing.assert_close(before, after)
-"""),
-        md(r"""
-## Analyse d'échec fondée sur les artefacts
-
-Une prédiction quasi constante « non-stress » doit être vérifiée par la matrice de confusion, la distribution des classes prédites, précision/rappel stress, rappel par sujet et distributions de probabilités conditionnelles. Les 960 pas récurrents, l'évanescence du gradient, le déséquilibre, la variabilité des participants, les quinze participants indépendants, l'emploi du seul état final et le surapprentissage à des motifs propres aux sujets sont des hypothèses, pas des causes établies sans expérience dédiée.
-"""),
-        code(r"""
-rnn_dir = PROJECT_ROOT / "artifacts/models/rnn_fair"
-if not (rnn_dir / "test_predictions.csv").exists(): rnn_dir = PROJECT_ROOT / "artifacts/models/rnn"
-if (rnn_dir / "test_predictions.csv").exists():
-    predictions = pd.read_csv(rnn_dir / "test_predictions.csv")
-    print("Distribution prédite :\n", predictions.predicted_label.value_counts(normalize=True).sort_index())
-    print("Matrice de confusion :\n", pd.crosstab(predictions.true_label, predictions.predicted_label))
-    per_subject = pd.read_csv(rnn_dir / "per_subject_metrics.csv")
-    display(per_subject[["subject_id", "stress_recall"]])
-    predictions.boxplot(column="stress_probability", by="true_label"); plt.suptitle(""); plt.title("Probabilité par vraie classe"); plt.show()
-"""),
-    ])
-
-
-def notebook_14() -> None:
-    write("14_model_comparison.ipynb", [
-        md(r"""
-# 14 — Comparaison globale mise à jour
-
-Ce notebook ne réentraîne aucun modèle. Il charge les artefacts sauvegardés. Le « gagnant du protocole » est le modèle choisi selon le macro-F1 de validation. La « généralisation test observée » décrit seulement la performance mesurée après gel du modèle, de la perte et du seuil ; elle ne sert pas à réviser la sélection.
-"""),
-        code(SETUP),
-        code(r"""
-MODEL_DIRS = {
-    "MLP statistique": "mlp",
-    "CNN 2D": "cnn2d",
-    "RNN": "rnn_fair" if (PROJECT_ROOT / "artifacts/models/rnn_fair").exists() else "rnn",
-    "LSTM": "lstm_fair" if (PROJECT_ROOT / "artifacts/models/lstm_fair").exists() else "lstm",
-}
-
-def load_model_row(display_name, directory):
-    path = PROJECT_ROOT / "artifacts/models" / directory
-    required = ["model_config.json", "validation_metrics.json", "test_metrics.json", "training_summary.json"]
-    if not all((path / name).exists() for name in required): return None
-    values = []
-    for name in required:
-        with open(path / name, encoding="utf-8") as handle: values.append(json.load(handle))
-    config, validation, test, summary = values
-    return {"model": display_name, "parameter count": config.get("parameter_count"),
-        "validation macro F1": validation.get("macro_f1"), "test macro F1": test.get("macro_f1"),
-        "weighted F1": test.get("weighted_f1"), "stress precision": test.get("stress_precision"),
-        "stress recall": test.get("stress_recall"), "ROC-AUC": test.get("roc_auc"),
-        "average precision": test.get("average_precision"), "best epoch": summary.get("best_epoch"),
-        "training time": summary.get("training_time_seconds"), "inference time": test.get("inference_time_seconds"),
-        "artifact directory": directory}
-
-rows = [row for name, directory in MODEL_DIRS.items() if (row := load_model_row(name, directory)) is not None]
-comparison = pd.DataFrame(rows)
-display(comparison)
-"""),
-        md("## Gagnant du protocole et généralisation test observée"),
-        code(r"""
-if len(comparison):
-    protocol_winner = comparison.loc[comparison["validation macro F1"].idxmax()]
-    print("Gagnant du protocole (validation) :", protocol_winner["model"])
-    print("Sa généralisation test observée :", protocol_winner["test macro F1"])
-    axes = comparison.set_index("model")[["validation macro F1", "test macro F1"]].plot.bar(figsize=(9, 4), rot=20)
-    axes.set_ylabel("Macro-F1"); axes.set_title("Validation contre test (test non utilisé pour sélectionner)"); plt.tight_layout(); plt.show()
-"""),
-        md("## Coût et métriques de la classe stress"),
-        code(r"""
-if len(comparison):
-    display(comparison[["model", "parameter count"]].sort_values("parameter count"))
-    display(comparison[["model", "training time", "inference time"]])
-    display(comparison[["model", "stress precision", "stress recall", "ROC-AUC", "average precision"]])
-"""),
-        md("## Résultats par sujet"),
-        code(r"""
-subject_frames = []
-for _, row in comparison.iterrows():
-    path = PROJECT_ROOT / "artifacts/models" / row["artifact directory"] / "per_subject_metrics.csv"
-    if path.exists():
-        frame = pd.read_csv(path); frame.insert(0, "model", row["model"]); subject_frames.append(frame)
-per_subject_all = pd.concat(subject_frames, ignore_index=True) if subject_frames else pd.DataFrame()
-display(per_subject_all)
-"""),
-        md(r"""
-## Synthèse conceptuelle
-
-- **MLP** : représentation statistique globale ;
-- **CNN 2D** : motifs temps-fréquence locaux dans les scalogrammes ;
-- **RNN/LSTM** : dépendances temporelles ordonnées.
-
-Une complexité ou un nombre de paramètres supérieur ne garantit pas une meilleure généralisation indépendante des sujets. WESAD ne fournit ici que quinze participants indépendants : les écarts entre validation et test peuvent refléter une forte sensibilité aux personnes composant chaque sous-ensemble. L'interprétation doit donc associer macro-F1, rappel stress et résultats par sujet, tout en conservant la distinction stricte entre choix sur validation et observation finale sur test.
 """),
     ])
 

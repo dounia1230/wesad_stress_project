@@ -71,8 +71,8 @@ def train_one_epoch(
             pre_norms.append(pre_norm)
         if gradient_clip is not None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=gradient_clip)
-            if record_gradient_norms:
-                post_norms.append(compute_global_gradient_norm(model.parameters()))
+        if record_gradient_norms:
+            post_norms.append(compute_global_gradient_norm(model.parameters()))
         optimizer.step()
         total_loss += float(loss.detach().cpu()) * batch_size
         total_samples += batch_size

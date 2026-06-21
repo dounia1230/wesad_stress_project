@@ -50,7 +50,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.config import *
-from src.evaluation import binary_metrics, collect_probabilities, per_subject_metrics, prediction_table, select_threshold
+from src.evaluation import binary_metrics, collect_probabilities, per_subject_metrics, prediction_table, select_threshold, validate_per_subject_columns
 from src.helpers import count_parameters, set_seed
 from src.training import pos_weight_from_labels, save_model_artifacts, train_with_early_stopping
 
@@ -187,7 +187,7 @@ for method in ("gaussian", "constant", "xavier"):
 Les trois modèles utilisent la même architecture, les mêmes données et la même graine. L'initialisation maximisant le macro-F1 de validation est gelée avant toute évaluation test. Une initialisation constante est incluse à titre pédagogique ; sa symétrie peut pénaliser l'apprentissage.
 """),
         code(r"""
-RUN_MLP_TRAINING = False
+RUN_MLP_TRAINING = True
 initialization_runs = {}
 if RUN_MLP_TRAINING:
     for method in ("gaussian", "constant", "xavier"):
@@ -210,6 +210,13 @@ if RUN_MLP_TRAINING:
     ]).sort_values("validation_macro_f1", ascending=False)
     display(initialization_table)
     selected_initialization = initialization_table.iloc[0]["initialization"]
+    initialization_artifact_dir = PROJECT_ROOT / "artifacts/models/mlp"
+    initialization_artifact_dir.mkdir(parents=True, exist_ok=True)
+    initialization_table.to_csv(initialization_artifact_dir / "initialization_validation_results.csv", index=False)
+    (initialization_artifact_dir / "selected_initialization.json").write_text(
+        json.dumps({"initialization": selected_initialization, "selected_on": "validation_macro_f1"}, indent=2),
+        encoding="utf-8",
+    )
 else:
     print("Non exécuté : activer RUN_MLP_TRAINING pour sélectionner l'initialisation sur validation.")
 """),
@@ -235,7 +242,21 @@ if RUN_MLP_TRAINING:
     test_start = time.perf_counter(); test_probabilities, test_true = collect_probabilities(model, test_loader, device); inference_time = time.perf_counter() - test_start
     test_metrics = {**binary_metrics(test_true, test_probabilities, threshold), "inference_time_seconds": inference_time}
     subject_metrics = per_subject_metrics(metadata_test, test_true, test_probabilities, threshold)
-    display(pd.DataFrame({"validation": validation_metrics, "test": test_metrics}))
+    display(pd.DataFrame({"validation": pd.Series(validation_metrics), "test": pd.Series(test_metrics)}))
+"""),
+        md("## 6.1 Courbes d'entraînement et matrice de confusion"),
+        code(r"""
+if RUN_MLP_TRAINING:
+    fig, ax = plt.subplots(figsize=(7, 4))
+    history.plot(x="epoch", y=["train_loss", "validation_loss"], ax=ax)
+    ax.set(title="MLP — pertes d'entraînement et de validation", ylabel="BCE")
+    plt.tight_layout(); plt.show()
+    cm = np.asarray(test_metrics["confusion_matrix"])
+    fig, ax = plt.subplots(figsize=(4, 4)); ax.imshow(cm, cmap="Blues")
+    ax.set(xticks=[0, 1], yticks=[0, 1], xticklabels=["non-stress", "stress"], yticklabels=["non-stress", "stress"], xlabel="Prédit", ylabel="Réel")
+    for row in range(2):
+        for col in range(2): ax.text(col, row, cm[row, col], ha="center", va="center")
+    ax.set_title("MLP — matrice de confusion test"); plt.tight_layout(); plt.show()
 """),
         md("## 7. Sauvegarde et rechargement du meilleur `state_dict`"),
         code(r"""
@@ -357,7 +378,7 @@ L'entrée réelle a la forme `(batch_size, 960, 6)` et la sortie `(batch_size, 1
         md("## 14. Entraînement complet"),
         code(f"""
 from src.experiments import run_validation_selected_experiment
-RUN_FULL_TRAINING = False
+RUN_FULL_TRAINING = True
 if RUN_FULL_TRAINING:
     datasets = (TensorDataset(X_train, y_train), TensorDataset(X_validation, y_validation), TensorDataset(X_test, y_test))
     result = run_validation_selected_experiment(
@@ -419,7 +440,7 @@ Le macro-F1 et le rappel stress doivent être examinés avec les résultats par 
 - BPTT propage le gradient de la perte vers les états antérieurs.
 - Un gradient évanescent devient trop faible pour apprendre des dépendances lointaines ; un gradient explosif devient excessivement grand.
 - L'écrêtage limite les gradients explosifs, mais ne restaure pas les gradients évanescents.
-- `hidden[-1]` est utilisé parce qu'il correspond à la représentation finale de la dernière couche.
+- `hidden[-1]` est utilisé parce qu'il correspond à la représentation finale de la dernière couche ; ce résumé unique peut devenir un goulot d'étranglement sur 960 pas.
 - La performance de validation peut ne pas se transférer aux participants test jamais vus.
 """),
     ])
@@ -469,7 +490,7 @@ assert norm_after <= 1.00001
         md("## 2. Données et comparaison contrôlée"),
         code(LOAD_SEQUENCES + "\nfrom src.experiments import run_validation_selected_experiment\ndatasets=(TensorDataset(X_train,y_train),TensorDataset(X_validation,y_validation),TensorDataset(X_test,y_test))"),
         code(r"""
-RUN_CLIPPING_EXPERIMENT = False
+RUN_CLIPPING_EXPERIMENT = True
 if RUN_CLIPPING_EXPERIMENT:
     for name, clip in [("without_clipping", None), ("clip_norm_1", 1.0)]:
         run_validation_selected_experiment(
@@ -554,7 +575,7 @@ else:
 """),
         md("## 4. Comparaison équitable RNN–LSTM"),
         code(r"""
-RUN_FAIR_RNN_LSTM = False
+RUN_FAIR_RNN_LSTM = True
 if RUN_FAIR_RNN_LSTM:
     fair_results = {}
     for name, factory in {"rnn_fair": lambda: SimpleRNNClassifier(6, 32), "lstm_fair": lambda: LSTMClassifier(6, 32)}.items():
@@ -588,6 +609,16 @@ if (PROJECT_ROOT / "artifacts/models/lstm_fair/per_subject_metrics.csv").exists(
 
 La distribution des prédictions et la matrice de confusion permettent de vérifier si le RNN prédit surtout non-stress. Le rappel stress du LSTM ne constitue une amélioration que s'il dépasse celui du RNN dans l'expérience équitable. Cette amélioration doit ensuite être mise en regard du nombre de paramètres supplémentaire. Avec quinze sujets, ces résultats restent sensibles aux participants de validation et de test.
 """),
+        md("""
+## Ce que je dois retenir pour la soutenance
+
+- Le RNN met à jour un état caché à chaque pas et `hidden[-1]` résume la fenêtre pour la classification.
+- BPTT propage les dérivées depuis la perte vers les états récurrents antérieurs.
+- Les produits répétés de Jacobiennes peuvent produire des gradients évanescents ou explosifs.
+- Le clipping limite une norme excessive, mais ne restaure pas un gradient évanescent.
+- Le LSTM ajoute une cellule mémoire et des portes d'oubli, d'entrée et de sortie ; cela augmente son nombre de paramètres.
+- Une amélioration sur deux sujets de validation peut ne pas se généraliser aux sujets test jamais vus.
+"""),
     ])
 
 
@@ -609,7 +640,12 @@ MODEL_SPECS = [
 ALLOWED_MODELS = {"MLP", "CNN 2D", "RNN", "LSTM"}
 
 def load_row(model, representation, candidates):
-    row = {"model": model, "input representation": representation, "status": "missing artifact"}
+    row = {
+        "model": model,
+        "input_representation": representation,
+        "status": "missing artifact",
+        "expected_path": " or ".join(str(PROJECT_ROOT / "artifacts/models" / directory) for directory in candidates),
+    }
     for directory in candidates:
         path = PROJECT_ROOT / "artifacts/models" / directory
         required = ["model_config.json", "validation_metrics.json", "test_metrics.json", "training_summary.json", "threshold.json"]
@@ -619,12 +655,12 @@ def load_row(model, representation, candidates):
         hidden = architecture.get("hidden_size", config.get("hidden_size")) if isinstance(architecture, dict) else config.get("hidden_size")
         if model in {"RNN", "LSTM"} and hidden not in {None, 32}:
             row["status"] = f"incompatible artifact ({directory}: hidden_size={hidden})"; continue
-        row.update({"status": "available", "artifact directory": directory, "parameter count": config.get("parameter_count"),
-            "best validation epoch": summary.get("best_epoch", config.get("best_validation_epoch")), "validation macro F1": validation.get("macro_f1"),
-            "test macro F1": test.get("macro_f1"), "weighted F1": test.get("weighted_f1"), "stress precision": test.get("stress_precision"),
-            "stress recall": test.get("stress_recall"), "ROC-AUC": test.get("roc_auc"), "average precision": test.get("average_precision"),
-            "selected threshold": threshold.get("threshold"), "training time": summary.get("training_time_seconds"),
-            "inference time": test.get("inference_time_seconds")})
+        row.update({"status": "available", "artifact_directory": directory, "parameter_count": config.get("parameter_count"),
+            "best_epoch": summary.get("best_epoch", config.get("best_validation_epoch")), "validation_macro_f1": validation.get("macro_f1"),
+            "test_macro_f1": test.get("macro_f1"), "weighted_f1": test.get("weighted_f1"), "stress_precision": test.get("stress_precision"),
+            "stress_recall": test.get("stress_recall"), "roc_auc": test.get("roc_auc"), "average_precision": test.get("average_precision"),
+            "selected_threshold": threshold.get("threshold"), "training_time": summary.get("training_time_seconds"),
+            "inference_time": test.get("inference_time_seconds")})
         break
     return row
 
@@ -632,25 +668,27 @@ comparison = pd.DataFrame([load_row(*spec) for spec in MODEL_SPECS])
 assert set(comparison.model) == ALLOWED_MODELS and len(comparison) == 4
 display(comparison)
 missing = comparison[comparison.status != "available"]
-if len(missing): print("Artefacts manquants ou incompatibles :", missing[["model", "status"]].to_dict("records"))
+if len(missing): print("Artefacts manquants ou incompatibles :", missing[["model", "status", "expected_path"]].to_dict("records"))
 """),
         md("## Gagnant du protocole et généralisation observée"),
         code(r"""
 available = comparison[comparison.status == "available"].copy()
 if len(available):
-    winner = available.loc[available["validation macro F1"].idxmax()]
+    winner = available.loc[available["validation_macro_f1"].idxmax()]
     print("Gagnant du protocole (validation) :", winner.model)
-    print("Généralisation test observée après gel :", winner["test macro F1"])
-    available.set_index("model")[["validation macro F1", "test macro F1"]].plot.bar(figsize=(8,4), rot=0)
+    print("Généralisation test observée après gel :", winner["test_macro_f1"])
+    available.set_index("model")[["validation_macro_f1", "test_macro_f1"]].plot.bar(figsize=(8,4), rot=0)
     plt.ylabel("Macro-F1"); plt.tight_layout(); plt.show()
 """),
         md("## Résultats par sujet"),
         code(r"""
 frames = []
 for _, row in available.iterrows():
-    path = PROJECT_ROOT / "artifacts/models" / row["artifact directory"] / "per_subject_metrics.csv"
+    path = PROJECT_ROOT / "artifacts/models" / row["artifact_directory"] / "per_subject_metrics.csv"
     if path.exists():
-        frame = pd.read_csv(path); frame.insert(0, "model", row.model); frames.append(frame)
+        frame = pd.read_csv(path)
+        validate_per_subject_columns(frame)
+        frame.insert(0, "model", row.model); frames.append(frame)
 per_subject_results = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 display(per_subject_results)
 """),

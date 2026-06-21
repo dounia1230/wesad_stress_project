@@ -54,6 +54,7 @@ def run_validation_selected_experiment(
     gradient_clip: float | None = None,
     record_gradient_norms: bool = False,
     record_validation_macro_f1: bool = False,
+    evaluate_test: bool = True,
 ) -> dict[str, Any]:
     """Train variants, select by validation macro F1, then evaluate test once.
 
@@ -117,14 +118,6 @@ def run_validation_selected_experiment(
         key=lambda item: (item["validation_metrics"]["macro_f1"], -abs(item["threshold"] - 0.5)),
     )
     model = selected["model"]
-    _, _, test_loader = make_loaders(*datasets)
-    inference_start = time.perf_counter()
-    test_probabilities, test_labels = collect_probabilities(model, test_loader, device)
-    inference_seconds = time.perf_counter() - inference_start
-    test_metrics = binary_metrics(test_labels, test_probabilities, selected["threshold"])
-    test_metrics["inference_time_seconds"] = inference_seconds
-    subject_table = per_subject_metrics(test_metadata, test_labels, test_probabilities, selected["threshold"])
-    predictions = prediction_table(test_metadata, test_labels, test_probabilities, selected["threshold"])
     validation_metrics = dict(selected["validation_metrics"])
     validation_metrics["variant_comparison"] = [
         {
@@ -147,6 +140,7 @@ def run_validation_selected_experiment(
         "loss_weighting": selected["method"],
         "classification_threshold": selected["threshold"],
         "parameter_count": count_parameters(model),
+        "test_evaluated": evaluate_test,
         "artifact_paths": {
             "directory": str(artifact_dir),
             "state_dict": str(artifact_dir / "best_model.pt"),
@@ -154,6 +148,43 @@ def run_validation_selected_experiment(
             "test_predictions": str(artifact_dir / "test_predictions.csv"),
         },
     }
+    if not evaluate_test:
+        torch.save(model.state_dict(), artifact_dir / "best_model.pt")
+        selected["history"].to_csv(artifact_dir / "training_history.csv", index=False)
+        save_json(artifact_dir / "model_config.json", full_config)
+        save_json(artifact_dir / "experiment_config.json", full_config)
+        save_json(artifact_dir / "training_summary.json", selected["summary"])
+        save_json(artifact_dir / "validation_metrics.json", validation_metrics)
+        save_json(
+            artifact_dir / "threshold.json",
+            {"threshold": selected["threshold"], "selected_on": "validation", "selection_metric": "macro_f1"},
+        )
+        prediction_table(
+            validation_metadata,
+            selected["validation_labels"],
+            selected["validation_probabilities"],
+            selected["threshold"],
+        ).to_csv(artifact_dir / "validation_predictions.csv", index=False)
+        return {
+            "model": model,
+            "history": selected["history"],
+            "training_summary": selected["summary"],
+            "validation_metrics": validation_metrics,
+            "test_metrics": None,
+            "per_subject_metrics": None,
+            "threshold": selected["threshold"],
+            "selected_loss": selected["method"],
+            "config": full_config,
+        }
+
+    _, _, test_loader = make_loaders(*datasets)
+    inference_start = time.perf_counter()
+    test_probabilities, test_labels = collect_probabilities(model, test_loader, device)
+    inference_seconds = time.perf_counter() - inference_start
+    test_metrics = binary_metrics(test_labels, test_probabilities, selected["threshold"])
+    test_metrics["inference_time_seconds"] = inference_seconds
+    subject_table = per_subject_metrics(test_metadata, test_labels, test_probabilities, selected["threshold"])
+    predictions = prediction_table(test_metadata, test_labels, test_probabilities, selected["threshold"])
     selected["summary"]["inference_time_seconds"] = inference_seconds
     save_model_artifacts(
         artifact_dir,
@@ -184,4 +215,47 @@ def run_validation_selected_experiment(
         "threshold": selected["threshold"],
         "selected_loss": selected["method"],
         "config": full_config,
+    }
+
+
+def evaluate_frozen_test_model(
+    result: dict[str, Any],
+    datasets: tuple[Dataset, Dataset, Dataset],
+    test_metadata: pd.DataFrame,
+    artifact_dir: Path,
+    device: torch.device,
+) -> dict[str, Any]:
+    """Evaluate test once after architecture and threshold are frozen on validation."""
+    if result.get("test_metrics") is not None:
+        raise ValueError("This experiment already contains test metrics.")
+    model = result["model"]
+    _, _, test_loader = make_loaders(*datasets)
+    inference_start = time.perf_counter()
+    probabilities, labels = collect_probabilities(model, test_loader, device)
+    inference_seconds = time.perf_counter() - inference_start
+    test_metrics = binary_metrics(labels, probabilities, result["threshold"])
+    test_metrics["inference_time_seconds"] = inference_seconds
+    subject_table = per_subject_metrics(test_metadata, labels, probabilities, result["threshold"])
+    predictions = prediction_table(test_metadata, labels, probabilities, result["threshold"])
+    summary = {**result["training_summary"], "inference_time_seconds": inference_seconds}
+    config = {**result["config"], "test_evaluated": True}
+    save_model_artifacts(
+        artifact_dir,
+        model,
+        config,
+        result["threshold"],
+        result["history"],
+        result["validation_metrics"],
+        test_metrics,
+        subject_table,
+        predictions,
+        summary,
+    )
+    save_json(artifact_dir / "experiment_config.json", config)
+    return {
+        **result,
+        "training_summary": summary,
+        "test_metrics": test_metrics,
+        "per_subject_metrics": subject_table,
+        "config": config,
     }
